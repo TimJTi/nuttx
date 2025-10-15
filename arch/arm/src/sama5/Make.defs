@@ -35,7 +35,7 @@ CHIP_CSRCS += sam_pgalloc.c
 endif
 
 ifeq ($(CONFIG_PM),y)
-CHIP_CSRCS += sama5_pminitialize.c
+CHIP_CSRCS += sam_pminitialize.c
 endif
 
 ifneq ($(CONFIG_SCHED_TICKLESS),y)
