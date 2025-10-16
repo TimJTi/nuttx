@@ -79,11 +79,11 @@ LLVM_ABITYPE := sysv
 # Cygwin toolchains don't generate ELF binaries.
 
 ifeq ($(CONFIG_WINDOWS_CYGWIN),y)
-CROSSDEV = i486-nuttx-elf-
+CROSSDEV ?= i486-nuttx-elf-
 endif
 
 ifeq ($(CONFIG_HOST_MACOS),y)
-CROSSDEV = x86_64-elf-
+CROSSDEV ?= x86_64-elf-
 endif
 
 ifneq ($(CONFIG_CXX_STANDARD),)
@@ -91,7 +91,7 @@ ifneq ($(CONFIG_CXX_STANDARD),)
 endif
 
 ifeq ($(CONFIG_STACK_CANARIES),y)
-  ARCHOPTIMIZATION += -fstack-protector-all
+  ARCHOPTIMIZATION += $(patsubst "%",%,$(CONFIG_STACK_CANARIES_LEVEL))
 else
   ARCHOPTIMIZATION += -fno-stack-protector
 endif
@@ -166,6 +166,7 @@ CPP = $(CROSSDEV)gcc -E -x c
 LD = $(CROSSDEV)ld
 STRIP = $(CROSSDEV)strip --strip-unneeded
 AR = $(CROSSDEV)ar rcs
+UNAR = $(CROSSDEV)ar x
 NM = $(CROSSDEV)nm
 OBJCOPY = $(CROSSDEV)objcopy
 OBJDUMP = $(CROSSDEV)objdump
@@ -245,11 +246,7 @@ endif
 CFLAGS := $(ARCHWARNINGS) $(ARCHOPTIMIZATION) $(ARCHCPUFLAGS) $(ARCHINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS)
 CXXFLAGS := $(ARCHOPTIMIZATION) $(ARCHCXXFLAGS) $(ARCHXXINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS)
 CPPFLAGS := $(ARCHINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS)
-AFLAGS := $(CFLAGS) -D__ASSEMBLY__
-
-ifeq ($(CONFIG_HOST_MACOS),y)
-AFLAGS += -Wa,--divide
-endif
+AFLAGS := $(CFLAGS) -D__ASSEMBLY__ -Wa,--divide
 
 # Loadable module definitions
 

@@ -78,10 +78,6 @@
 
 /* Configuration ************************************************************/
 
-/* See boards/arm/stm32/stm3240g-eval/README.txt for an explanation of the
- * configuration settings.
- */
-
 #if STM32F7_NETHERNET > 1
 #  error "Logic to support multiple Ethernet interfaces is incomplete"
 #endif
@@ -3130,7 +3126,9 @@ static inline int stm32_dm9161(struct stm32_ethmac_s *priv)
 
 static int stm32_phyinit(struct stm32_ethmac_s *priv)
 {
+#ifdef CONFIG_STM32F7_AUTONEG
   volatile uint32_t timeout;
+#endif
   uint32_t regval;
   uint16_t phyval;
   int ret;

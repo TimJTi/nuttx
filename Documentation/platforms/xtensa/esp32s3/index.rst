@@ -476,8 +476,206 @@ Then, it can be customized in the menu :menuselection:`System Type --> ADC Confi
 
 .. warning:: Minimum and maximum measurable voltages may saturate around 100 mV and 3000 mV, respectively.
 
+.. _MCUBoot and OTA Update S3:
+
+MCUBoot and OTA Update
+======================
+
+The ESP32-S3 supports over-the-air (OTA) updates using MCUBoot.
+
+Read more about the MCUBoot for Espressif devices `here <https://docs.mcuboot.com/readme-espressif.html>`__.
+
+Executing OTA Update
+--------------------
+
+This section describes how to execute OTA update using MCUBoot.
+
+1. First build the default ``mcuboot_update_agent`` config. This image defaults to the primary slot and already comes with Wi-Fi settings enabled::
+
+    ./tools/configure.sh esp32s3-devkit:mcuboot_update_agent
+
+2. Build the MCUBoot bootloader::
+
+    make bootloader
+
+3. Finally, build the application image::
+
+    make
+
+Flash the image to the board and verify it boots ok.
+It should show the message "This is MCUBoot Update Agent image" before NuttShell is ready.
+
+At this point, the board should be able to connect to Wi-Fi so we can download a new binary from our network::
+
+  NuttShell (NSH) NuttX-12.4.0
+  This is MCUBoot Update Agent image
+  nsh>
+  nsh> wapi psk wlan0 <wifi_ssid> 3
+  nsh> wapi essid wlan0 <wifi_password> 1
+  nsh> renew wlan0
+
+Now, keep the board as is and execute the following commands to **change the MCUBoot target slot to the 2nd slot**
+and modify the message of the day (MOTD) as a mean to verify the new image is being used.
+
+1. Change the MCUBoot target slot to the 2nd slot::
+
+    kconfig-tweak -d CONFIG_ESPRESSIF_ESPTOOL_TARGET_PRIMARY
+    kconfig-tweak -e CONFIG_ESPRESSIF_ESPTOOL_TARGET_SECONDARY
+    kconfig-tweak --set-str CONFIG_NSH_MOTD_STRING "This is MCUBoot UPDATED image!"
+    make olddefconfig
+
+  .. note::
+    The same changes can be accomplished through ``menuconfig`` in :menuselection:`System Type --> Bootloader and Image Configuration --> Target slot for image flashing`
+    for MCUBoot target slot and in :menuselection:`System Type --> Bootloader and Image Configuration --> Search (motd) --> NSH Library --> Message of the Day` for the MOTD.
+
+2. Rebuild the application image::
+
+    make
+
+At this point the board is already connected to Wi-Fi and has the primary image flashed.
+The new image configured for the 2nd slot is ready to be downloaded.
+
+To execute OTA, create a simple HTTP server on the NuttX directory so we can access the binary remotely::
+
+  cd nuttxspace/nuttx
+  python3 -m http.server
+   Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+
+On the board, execute the update agent, setting the IP address to the one on the host machine. Wait until image is transferred and the board should reboot automatically::
+
+  nsh> mcuboot_agent http://10.42.0.1:8000/nuttx.bin
+  MCUboot Update Agent example
+  Downloading from http://10.42.0.1:8000/nuttx.bin
+  Firmware Update size: 1048576 bytes
+  Received: 512      of 1048576 bytes [0%]
+  Received: 1024     of 1048576 bytes [0%]
+  Received: 1536     of 1048576 bytes [0%]
+  [.....]
+  Received: 1048576  of 1048576 bytes [100%]
+  Application Image successfully downloaded!
+  Requested update for next boot. Restarting...
+
+NuttShell should now show the new MOTD, meaning the new image is being used::
+
+  NuttShell (NSH) NuttX-12.4.0
+  This is MCUBoot UPDATED image!
+  nsh>
+
+Finally, the image is loaded but not confirmed.
+To make sure it won't rollback to the previous image, you must confirm with ``mcuboot_confirm`` and reboot the board.
+The OTA is now complete.
+
+Flash Allocation for MCUBoot
+----------------------------
+
+When MCUBoot is enabled on ESP32-S3, the flash memory is organized as follows
+based on the default KConfig values:
+
+**Flash Layout (MCUBoot Enabled)**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 20 20
+   :align: left
+
+   * - Region
+     - Offset
+     - Size
+   * - Bootloader
+     - 0x000000
+     - 64KB
+   * - E-Fuse Virtual (see Note)
+     - 0x010000
+     - 64KB
+   * - Primary Application Slot (/dev/ota0)
+     - 0x020000
+     - 1MB
+   * - Secondary Application Slot (/dev/ota1)
+     - 0x120000
+     - 1MB
+   * - Scratch Partition (/dev/otascratch)
+     - 0x220000
+     - 256KB
+   * - Storage MTD (optional)
+     - 0x260000
+     - 1MB
+   * - Available Flash
+     - 0x360000+
+     - Remaining
+
+.. raw:: html
+
+   <div style="clear: both"></div>
+
+
+**Note**: The E-Fuse Virtual region is optional and only used when
+``ESPRESSIF_EFUSE_VIRTUAL_KEEP_IN_FLASH`` is enabled. However, this 64KB
+location is always allocated in the memory layout to prevent accidental
+erasure during board flashing operations, ensuring data preservation if
+virtual E-Fuses are later enabled.
+
+.. code-block:: text
+
+    Memory Map (Addresses in hex):
+
+    0x000000  ┌─────────────────────────────┐
+              │                             │
+              │      MCUBoot Bootloader     │
+              │           (64KB)            │
+              │                             │
+    0x010000  ├─────────────────────────────┤
+              │       E-Fuse Virtual        │
+              │           (64KB)            │
+    0x020000  ├─────────────────────────────┤
+              │                             │
+              │      Primary App Slot       │
+              │            (1MB)            │
+              │          /dev/ota0          │
+              │                             │
+    0x120000  ├─────────────────────────────┤
+              │                             │
+              │     Secondary App Slot      │
+              │            (1MB)            │
+              │          /dev/ota1          │
+              │                             │
+    0x220000  ├─────────────────────────────┤
+              │                             │
+              │      Scratch Partition      │
+              │           (256KB)           │
+              │       /dev/otascratch       │
+              │                             │
+    0x260000  ├─────────────────────────────┤
+              │                             │
+              │   Storage MTD (optional)    │
+              │            (1MB)            │
+              │                             │
+    0x360000  ├─────────────────────────────┤
+              │                             │
+              │       Available Flash       │
+              │         (Remaining)         │
+              │                             │
+              └─────────────────────────────┘
+
+The key KConfig options that control this layout:
+
+- ``ESPRESSIF_OTA_PRIMARY_SLOT_OFFSET`` (default: 0x20000)
+- ``ESPRESSIF_OTA_SECONDARY_SLOT_OFFSET`` (default: 0x120000)
+- ``ESPRESSIF_OTA_SLOT_SIZE`` (default: 0x100000)
+- ``ESPRESSIF_OTA_SCRATCH_OFFSET`` (default: 0x220000)
+- ``ESPRESSIF_OTA_SCRATCH_SIZE`` (default: 0x40000)
+- ``ESPRESSIF_STORAGE_MTD_OFFSET`` (default: 0x260000 when MCUBoot enabled)
+- ``ESPRESSIF_STORAGE_MTD_SIZE`` (default: 0x100000)
+- ``ESPRESSIF_EFUSE_VIRTUAL_KEEP_IN_FLASH_OFFSET`` (default 0x10000 when MCUBoot enabled)
+
+For MCUBoot operation:
+
+- The **Primary Slot** contains the currently running application
+- The **Secondary Slot** receives OTA updates
+- The **Scratch Partition** is used by MCUBoot for image swapping during updates
+- MCUBoot manages image validation, confirmation, and rollback functionality
+
 Wi-Fi
------
+=====
 
 .. tip:: Boards usually expose a ``wifi`` defconfig which enables Wi-Fi. On ESP32-S3,
    SMP is enabled to enhance Wi-Fi performance.
@@ -521,6 +719,18 @@ using WPA2.
 
 The ``dhcpd_start`` is necessary to let your board to associate an IP to your smartphone.
 
+Power Management
+================
+
+.. tip:: Boards usually expose a pm defconfig which enables power management
+  features. On ESP32-S3, different low power modes can be used to reduce power
+  consumption depending on the application.
+
+When using this board configuration profile, two wakeup sources are available:
+
+- Timer (mandatory) : Every time the board enters sleep mode, a timer is started. Once the defined time is reached, the board wakes up.
+- EXT1 (optional): The board wakes up whenever the selected EXT1 GPIO is asserted to the configured level.
+
 PSRAM
 -----
 
@@ -544,6 +754,169 @@ Set the attribute ``__attribute__ ((section (".ext_ram.bss")))`` to the variable
 ``my_data`` will be allocated in the external PSRAM and can be explicitly initialized on runtime.
 
 This is particularly useful when the internal RAM is not enough to hold all the data.
+
+.. _esp32s3_ulp:
+
+ULP RISC-V Coprocessor
+======================
+
+The ULP RISC-V core is a 32-bit coprocessor integrated into the ESP32-S3 SoC.
+It is designed to run independently of the main high-performance (HP) core and is capable of executing lightweight tasks
+such as GPIO polling, simple peripheral control and I/O interactions.
+
+This coprocessor benefits to offload simple tasks from HP core (e.g., GPIO polling , I2C operations, basic control logic) and
+frees the main CPU for higher-level processing
+
+For more information about ULP RISC-V Coprocessor `check here <https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/ulp-risc-v.html>`__.
+
+Features of the ULP RISC-V Coprocessor
+--------------------------------------
+
+* Processor Architecture
+   - RV32IMC RISC-V core — Integer (I), Multiplication/Division (M), and Compressed (C) instructions
+   - Runs at 17.5 MHz
+* Memory
+   - Access to 8 KB of RTC slow memory (RTC_SLOW_MEM) memory region, and registers in RTC_CNTL, RTC_IO, and SARADC peripherals
+* Debugging
+   - Logging via bit-banged UART
+   - Shared memory for state inspection
+   - Panic or exception handlers can trigger wake-up or signal to main CPU if main CPU is in sleep
+* Peripheral support
+   - RTC domain peripherals (RTC GPIO, RTC I2C, ADC)
+
+Loading Binary into ULP RISC-V Coprocessor
+------------------------------------------
+
+There are two ways to load a binary into LP-Core:
+  - Using a prebuilt binary
+  - Using NuttX internal build system to build your own (bare-metal) application
+
+When using a prebuilt binary, the already compiled output for the ULP system whether built from NuttX
+or the ESP-IDF environment can be leveraged. However, whenever the ULP code needs to be modified, it must be rebuilt separately,
+and the resulting .bin file has to be integrated into NuttX. This workflow, while compatible, can become tedious.
+
+With NuttX internal build system, the ULP binary code can be built and flashed from a single location. It is more convenient but
+using build system has some dependencies on example side.
+
+Both methods requires `CONFIG_ESP32S3_ULP_COPROC_ENABLED` and `CONFIG_ESP32S3_ULP_COPROC_RESERVE_MEM` variables to set ULP RISC-V core and
+`CONFIG_ESPRESSIF_ULP_RISCV_PROJECT_PATH` variable to set the path to the ULP project or prebuilt binary file
+relative to NuttX root folder.
+These variables can be set using `make menuconfig` or `kconfig-tweak` commands.
+
+Here is an example for enabling ULP and using a prebuilt binary for ULP RISC-V core::
+
+    make distclean
+    ./tools/configure.sh esp32s3-devkit:nsh
+    kconfig-tweak -e CONFIG_ESP32S3_ULP_COPROC_ENABLED
+    kconfig-tweak --set-val CONFIG_ESP32S3_ULP_COPROC_RESERVE_MEM 8176
+    kconfig-tweak --set-str CONFIG_ESPRESSIF_ULP_RISCV_PROJECT_PATH "Documentation/platforms/xtensa/esp32s3/boards/esp32s3-devkit/ulp_riscv_blink.bin"
+    make olddefconfig
+    make -j
+
+Creating an ULP RISC-V Coprocessor Application
+----------------------------------------------
+
+To use NuttX's internal build system to compile the bare-metal ULP RISC-V Coprocessor binary, check the following instructions.
+
+First, create a folder for the ULP source and header files. This folder is just for ULP project and it is
+an independent project. Therefore, the NuttX example guide should not be followed, and no Makefile or similar
+build files should be added. Also folder location could be anywhere. To include ULP folder into build
+system don't forget to set `CONFIG_ESPRESSIF_ULP_RISCV_PROJECT_PATH` variable with path of the ULP project folder relative to
+NuttX root folder. Instructions for setting up can be found above.
+
+NuttX's internal functions or POSIX calls are not supported.
+
+Here is an example:
+
+- ULP UART Snippet:
+
+.. code-block:: C
+
+  #include "ulp_riscv.h"
+  #include "ulp_riscv_utils.h"
+  #include "ulp_riscv_print.h"
+  #include "ulp_riscv_uart_ulp_core.h"
+  #include "sdkconfig.h"
+
+  static ulp_riscv_uart_t s_print_uart;
+
+  int main (void)
+  {
+    ulp_riscv_uart_cfg_t cfg = {
+        .tx_pin = 0,
+    };
+    ulp_riscv_uart_init(&s_print_uart, &cfg);
+    ulp_riscv_print_install((putc_fn_t)ulp_riscv_uart_putc, &s_print_uart);
+
+    while(1)
+    {
+      ulp_riscv_print_str("Hello from the LP core!!\r\n");
+      ulp_riscv_delay_cycles(1000 * ULP_RISCV_CYCLES_PER_MS);
+    }
+
+    return 0;
+  }
+
+For more information about ULP RISC-V Coprocessor examples `check here <https://github.com/espressif/esp-idf/tree/master/examples/system/ulp/lp_core>`__.
+After these settings follow the same steps as for any other configuration to build NuttX. Build system checks ULP project path,
+adds every source and header file into project and builds it.
+
+To sum up, here is an complete example. `ulp_example/ulp (../ulp_example/ulp)` folder selected as example
+to create a subfolder for ULP but folder that includes ULP source code can be anywhere:
+
+- Tree view:
+
+.. code-block:: text
+
+   nuttxspace/
+   ├── nuttx/
+   └── apps/
+   └── ulp_example/
+       └── ulp/
+           └── ulp_main.c
+
+- Contents in ulp_main.c:
+
+.. code-block:: C
+
+   #include <stdio.h>
+   #include <stdint.h>
+   #include <stdbool.h>
+   #include "ulp_riscv.h"
+   #include "ulp_riscv_utils.h"
+   #include "ulp_riscv_gpio.h"
+
+   #define GPIO_PIN 0
+
+   #define nop() __asm__ __volatile__ ("nop")
+
+   bool gpio_level_previous = true;
+
+   int main (void)
+    {
+       while (1)
+           {
+           ulp_riscv_gpio_output_level(GPIO_PIN, gpio_level_previous);
+           gpio_level_previous = !gpio_level_previous;
+           for (int i = 0; i < 10000; i++)
+             {
+               nop();
+             }
+           }
+
+       return 0;
+    }
+
+- Command to build::
+
+    make distclean
+    ./tools/configure.sh esp32s3-devkitc:nsh
+    kconfig-tweak -e CONFIG_ESP32S3_ULP_COPROC_ENABLED
+    kconfig-tweak --set-val CONFIG_ESP32S3_ULP_COPROC_RESERVE_MEM 8176
+    kconfig-tweak -e CONFIG_DEV_GPIO
+    kconfig-tweak --set-str CONFIG_ESPRESSIF_ULP_RISCV_PROJECT_PATH "../ulp_example/ulp"
+    make olddefconfig
+    make -j
 
 _`Managing esptool on virtual environment`
 ==========================================

@@ -40,8 +40,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <math.h>
-#include <time.h>
 #include <termios.h>
 
 #include <nuttx/fs/fs.h>
@@ -51,7 +49,7 @@
 #include <nuttx/semaphore.h>
 #include <nuttx/signal.h>
 #include <nuttx/wqueue.h>
-#include <nuttx/sensors/sensor.h>
+#include <nuttx/sensors/gnss.h>
 #include <minmea/minmea.h>
 
 #include <nuttx/sensors/l86xxx.h>
@@ -74,13 +72,10 @@
   #error "Invalid baud rate. Supported baud rates are: 4800, 5600, 14400, 19200, 38400, 57600, 115200"
 #endif
 
-#if CONFIG_L86_XXX_FIX_INT < 100 || CONFIG_L86_XXX_FIX_INT > 10000
-  #error "Invalid fix interval rate. Values must be between 100 and 10000"  
-#endif
-
 /* Helper to get array length */
 
-#define MINMEA_MAX_LENGTH    256
+#define MINMEA_MAX_LENGTH 256
+#define L86_ACK_RETRIES 20
 
 /****************************************************************************
  * Private Data Types
@@ -91,12 +86,11 @@
 typedef struct
 {
   FAR struct file uart;               /* UART interface */
-  struct sensor_lowerhalf_s lower;    /* UORB lower-half */
+  struct gnss_lowerhalf_s lower;      /* uORB GNSS lower-half */
+  bool enabled;                       /* If module has started */
   mutex_t devlock;                    /* Exclusive access */
   sem_t run;                          /* Start/stop collection thread */
-  bool enabled;                       /* If module has started */
   char buffer[MINMEA_MAX_LENGTH];     /* Buffer for UART interface */
-  int bufbytes;
 #ifndef CONFIG_DISABLE_PSEUDOFS_OPERATIONS
   int16_t crefs; /* Number of open references */
 #endif
@@ -106,13 +100,14 @@ typedef struct
  * Private Function Prototypes
  ****************************************************************************/
 
-static int l86xxx_control(FAR struct sensor_lowerhalf_s *lower,
-                         FAR struct file *filep, int cmd, unsigned long arg);
-static int l86xxx_activate(FAR struct sensor_lowerhalf_s *lower,
-                          FAR struct file *filep, bool enable);
-static int l86xxx_set_interval(FAR struct sensor_lowerhalf_s *lower,
-                                     FAR struct file *filep,
-                                     FAR uint32_t *period_us);
+static int l86xxx_control(FAR struct gnss_lowerhalf_s *lower,
+                          FAR struct file *filep, int cmd,
+                          unsigned long arg);
+static int l86xxx_activate(FAR struct gnss_lowerhalf_s *lower,
+                           FAR struct file *filep, bool enable);
+static int l86xxx_set_interval(FAR struct gnss_lowerhalf_s *lower,
+                               FAR struct file *filep,
+                               FAR uint32_t *period_us);
 #ifdef CONFIG_SERIAL_TERMIOS
 static int set_baud_rate(l86xxx_dev_s *dev, int br);
 #endif
@@ -124,7 +119,7 @@ static int read_line(l86xxx_dev_s *dev);
  * Private Data
  ****************************************************************************/
 
-static const struct sensor_ops_s g_sensor_ops =
+static const struct gnss_ops_s g_gnss_ops =
 {
   .control = l86xxx_control,
   .activate = l86xxx_activate,
@@ -237,14 +232,14 @@ static int set_baud_rate(l86xxx_dev_s *dev, int br)
 static int send_command(l86xxx_dev_s *dev,
                           L86XXX_PMTK_COMMAND cmd, unsigned long arg)
 {
-  char buf[50];
+  char buf[64];
   int bw1;
   int bw2;
   int err;
-  int ret;
+  int i = 0;
+  ssize_t len;
   uint8_t checksum;
 
-  nxmutex_lock(&dev->devlock);
   switch (cmd)
   {
     case CMD_HOT_START:
@@ -285,15 +280,15 @@ static int send_command(l86xxx_dev_s *dev,
   }
 
   sninfo("Sending command: %s to L86", buf);
-
   checksum = minmea_checksum(buf);
   bw2 = snprintf(buf + bw1, sizeof(buf) - bw1, "*%02X\r\n", checksum);
 
+  nxmutex_lock(&dev->devlock);
   err = file_write(&dev->uart, buf, bw1 + bw2);
   if (err < 0)
   {
     snerr("Could not send command to device\n");
-    return err;
+    goto early_ret;
   }
 
   /* These commands do not send ACKs so just return after they've been
@@ -305,8 +300,8 @@ static int send_command(l86xxx_dev_s *dev,
       cmd == CMD_COLD_START ||
       cmd == CMD_FULL_COLD_START)
     {
-      nxmutex_unlock(&dev->devlock);
-      return 0;
+      err = 0;
+      goto early_ret;
     }
 
   /* Setting baud rate also doesn't send an ACK but the interface baud rate
@@ -317,12 +312,11 @@ static int send_command(l86xxx_dev_s *dev,
   {
 #ifdef CONFIG_SERIAL_TERMIOS
     nxsig_usleep(20000); /* Should wait for a bit before changing interface baud rate */
-    ret = set_baud_rate(dev, (int)arg);
+    err = set_baud_rate(dev, (int)arg);
 #else
-    ret = -EINVAL;
+    err = -EINVAL;
 #endif
-    nxmutex_unlock(&dev->devlock);
-    return ret;
+    goto early_ret;
   }
 
   /* Some commands will send ACKs,
@@ -338,45 +332,49 @@ static int send_command(l86xxx_dev_s *dev,
    * 3 = Valid packet, action succeeded
    */
 
-  memset(buf, '\0', 50);
-  snprintf(buf, 50, "$PMTK001,%d", cmd);
+  len = snprintf(buf, sizeof(buf), "$PMTK001,%d", cmd);
   sninfo("Waiting for ACK from L86...\n");
-  read_line(dev);
 
-  if (strncmp(buf, dev->buffer, strlen(buf)) == 0)
+  do
     {
-      sninfo("ACK received!\n");
+      read_line(dev);
+      i++;
     }
-  else
+  while (strncmp(buf, dev->buffer, len) != 0 && i < L86_ACK_RETRIES);
+
+  if (i >= L86_ACK_RETRIES)
     {
       snerr("Did not get ACK!\n");
-      nxmutex_unlock(&dev->devlock);
-      return -EIO;
+      err = -EIO;
+      goto early_ret;
     }
 
-  nxmutex_unlock(&dev->devlock);
+  sninfo("ACK received!\n");
 
   /* Flag num is always in position 13 of ack, subtract by '0'
   to obtain return val
   */
 
-  ret = dev->buffer[13] - '0';
-  if (ret == 1)
+  switch (dev->buffer[13] - '0')
     {
-      return -ENOSYS;
+    case 1:
+      err = -ENOSYS;
+      break;
+    case 2:
+      err = -EIO;
+      break;
+    case 3:
+      err = 0;
+      break;
+    default:
+      err = -EINVAL;
+      break;
+      break;
     }
-  else if (ret == 2)
-    {
-      return -EIO;
-    }
-  else if (ret == 3)
-    {
-      return 0;
-    }
-  else
-    {
-      return -EINVAL;
-    }
+
+early_ret:
+  nxmutex_unlock(&dev->devlock);
+  return err;
 }
 
 /****************************************************************************
@@ -395,10 +393,10 @@ static int send_command(l86xxx_dev_s *dev,
 
 static int read_line(l86xxx_dev_s *dev)
 {
-  memset(dev->buffer, '\0', sizeof(dev->buffer));
   int line_len = 0;
   int err;
   char next_char;
+
   do
     {
       err = file_read(&dev->uart, &next_char, 1);
@@ -408,13 +406,13 @@ static int read_line(l86xxx_dev_s *dev)
           return err;
         }
 
-      if (next_char != '\r' && next_char != '\n')
+      if (next_char != '\n')
         {
           dev->buffer[line_len++] = next_char;
         }
     }
-  while (next_char != '\r' && next_char != '\n'
-             && line_len < sizeof(dev->buffer));
+  while (next_char != '\n' && line_len < sizeof(dev->buffer));
+
   dev->buffer[line_len] = '\0';
   return line_len;
 }
@@ -430,8 +428,8 @@ static int read_line(l86xxx_dev_s *dev)
  *   else return value from send_command
  ****************************************************************************/
 
-static int l86xxx_control(FAR struct sensor_lowerhalf_s *lower,
-                        FAR struct file *filep, int cmd, unsigned long arg)
+static int l86xxx_control(FAR struct gnss_lowerhalf_s *lower,
+                          FAR struct file *filep, int cmd, unsigned long arg)
 {
   FAR l86xxx_dev_s *dev = container_of(lower, FAR l86xxx_dev_s, lower);
   L86XXX_PMTK_COMMAND pmtk_cmd;
@@ -485,8 +483,8 @@ static int l86xxx_control(FAR struct sensor_lowerhalf_s *lower,
  *   Return value from send_command
  ****************************************************************************/
 
-static int l86xxx_activate(FAR struct sensor_lowerhalf_s *lower,
-                              FAR struct file *filep, bool enable)
+static int l86xxx_activate(FAR struct gnss_lowerhalf_s *lower,
+                           FAR struct file *filep, bool enable)
 {
   FAR l86xxx_dev_s *dev = container_of(lower, FAR l86xxx_dev_s, lower);
 
@@ -496,7 +494,6 @@ static int l86xxx_activate(FAR struct sensor_lowerhalf_s *lower,
     {
       nxsem_post(&dev->run);
       dev->enabled = true;
-      return send_command(dev, CMD_HOT_START, (int)NULL);
     }
 
   /* If not already disabled, send gps into standby mode */
@@ -504,7 +501,6 @@ static int l86xxx_activate(FAR struct sensor_lowerhalf_s *lower,
   else if (!enable && dev->enabled)
     {
       dev->enabled = false;
-      return send_command(dev, CMD_STANDBY_MODE, 0);
     }
 
   return 0;
@@ -520,18 +516,20 @@ static int l86xxx_activate(FAR struct sensor_lowerhalf_s *lower,
  *   -EINVAL if invalid interval, else return value from send_command
  ****************************************************************************/
 
-static int l86xxx_set_interval(FAR struct sensor_lowerhalf_s *lower,
-                                    FAR struct file *filep,
-                                    FAR uint32_t *period_us)
+static int l86xxx_set_interval(FAR struct gnss_lowerhalf_s *lower,
+                               FAR struct file *filep,
+                               FAR uint32_t *period_us)
 {
   FAR l86xxx_dev_s *dev = container_of(lower, FAR l86xxx_dev_s, lower);
-  int fix_interval = *period_us;
+  int fix_interval = *period_us / 1000;
+  int ret;
+
   if (fix_interval < 100 || fix_interval > 10000)
     {
       return -EINVAL;
     }
 
-  int ret = send_command(dev, SET_POS_FIX, fix_interval);
+  ret = send_command(dev, SET_POS_FIX, fix_interval);
   return ret;
 }
 
@@ -546,11 +544,8 @@ static int l86xxx_thread(int argc, FAR char *argv[])
 {
   FAR l86xxx_dev_s *dev =
       (FAR l86xxx_dev_s *)((uintptr_t)strtoul(argv[1], NULL, 16));
-  struct sensor_gnss gps;
-  memset(&gps, 0, sizeof(gps));
-  dev->enabled = true;
   int err;
-  int bw;
+  ssize_t bw;
 
   /* Read full line of NMEA output */
 
@@ -570,139 +565,27 @@ static int l86xxx_thread(int argc, FAR char *argv[])
             }
         }
 
-      /* Mutex required because some commands send ACKS */
+      /* Mutex required because some commands send ACKS, don't want those to
+       * interrupt reading data.
+       */
 
-      err = nxmutex_lock(&dev->devlock);
-      if (err < 0)
+      nxmutex_lock(&dev->devlock);
+      bw = file_read(&dev->uart, dev->buffer, sizeof(dev->buffer));
+
+      if (bw <= 0)
         {
-          snerr("Couldn't lock mutex\n");
-          return err;
+          snerr("No data on UART: %d\n", bw);
+          nxmutex_unlock(&dev->devlock);
+          continue;
         }
 
-      bw = read_line(dev);
-
-      /* Parse line based on NMEA sentence type */
+      /* Send data read to the lower half for parsing. Does not need to be a
+       * full NMEA sentence to be handled.
+       */
 
       if (bw > 0)
         {
-          switch (minmea_sentence_id(dev->buffer, false))
-          {
-            /* Time data is obtained from RMC sentence */
-
-            case MINMEA_SENTENCE_RMC:
-            {
-              struct minmea_sentence_rmc frame;
-              struct tm tm;
-              if (minmea_check(dev->buffer, false) &&
-                  minmea_parse_rmc(&frame, dev->buffer))
-                {
-                  gps.timestamp = sensor_get_timestamp();
-                  minmea_getdatetime(&tm, &frame.date, &frame.time);
-                  gps.time_utc = mktime(&tm);
-                }
-              break;
-            }
-
-            /* Velocity data is obtained from VTG sentence */
-
-            case MINMEA_SENTENCE_VTG:
-            {
-              struct minmea_sentence_vtg frame;
-
-              if (minmea_parse_vtg(&frame, dev->buffer))
-                {
-                  gps.ground_speed = minmea_tofloat(&frame.speed_kph) * 3.6; /* Convert speed in kph to mps */
-                  gps.course = minmea_tofloat(&frame.true_track_degrees);
-                }
-              break;
-            }
-
-            /* 3D positional data is obtained from GGA sentence */
-
-            case MINMEA_SENTENCE_GGA:
-            {
-              struct minmea_sentence_gga frame;
-
-              if (minmea_parse_gga(&frame, dev->buffer))
-                {
-                  gps.latitude = minmea_tocoord(&frame.latitude);
-                  gps.longitude = minmea_tocoord(&frame.longitude);
-                  gps.altitude = minmea_tofloat(&frame.altitude);
-                  gps.altitude_ellipsoid = minmea_tofloat(&frame.height);
-                }
-              break;
-            }
-
-            /* Precision dilution and satellite data is obtained from
-            * GSA sentence
-            */
-
-            case MINMEA_SENTENCE_GSA:
-            {
-              struct minmea_sentence_gsa frame;
-
-              if (minmea_parse_gsa(&frame, dev->buffer))
-                {
-                  gps.hdop = minmea_tofloat(&frame.hdop);
-                  gps.pdop = minmea_tofloat(&frame.pdop);
-                  gps.vdop = minmea_tofloat(&frame.vdop);
-                  uint32_t sats = 0;
-                  for (int i = 0; i < 12; ++i)
-                    {
-                      if (frame.sats[i] != 0)
-                        {
-                          ++sats;
-                        }
-                    }
-
-                  gps.satellites_used = sats;
-                }
-              break;
-            }
-
-            /* GSV and GLL data are transmitted by the l86-XXX but do not
-            provide additional information. Since GLL is always the last
-            message transmitted, events will be pushed whenever that
-            sentence is read
-            */
-
-            case MINMEA_SENTENCE_GLL:
-            {
-                dev->lower.push_event(dev->lower.priv, &gps, sizeof(gps));
-            }
-
-            /* All remaining sentences are not transmitted by the module */
-
-            case MINMEA_SENTENCE_GSV:
-            case MINMEA_SENTENCE_GBS:
-            case MINMEA_SENTENCE_GST:
-            case MINMEA_SENTENCE_ZDA:
-            {
-              break;
-            }
-
-            case MINMEA_INVALID:
-            {
-              snerr("Read invalid NMEA statement: %s\n", dev->buffer);
-              break;
-            }
-
-            case MINMEA_UNKNOWN:
-            {
-              /* Message could be non-standard NMEA message,
-              in that case just ignore
-              */
-
-              if (strncmp("$GPTXT", dev->buffer, strlen("$GPTXT")) == 0)
-                {
-                  break;
-                }
-
-              snwarn("Read unknown NMEA statement: %s %d\n",
-                      dev->buffer, bw);
-              break;
-            }
-          }
+          dev->lower.push_data(dev->lower.priv, dev->buffer, bw, true);
         }
 
       nxmutex_unlock(&dev->devlock);
@@ -731,6 +614,7 @@ int l86xxx_register(FAR const char *uartpath, int devno)
 {
   FAR l86xxx_dev_s *priv = NULL;
   int err;
+  uint32_t nbuffers[SENSOR_GNSS_IDX_GNSS_MAX];
   char *buf;
   FAR char *argv[2];
   char arg1[32];
@@ -793,20 +677,22 @@ int l86xxx_register(FAR const char *uartpath, int devno)
     {
       snwarn("Couldn't set baud rate of device: %d\n", err);
     }
-  #endif
-
-  err = send_command(priv, SET_POS_FIX, CONFIG_L86_XXX_FIX_INT);
-  if (err < 0)
-    {
-      snwarn("Couldn't set position fix interval, %d\n", err);
-    }
+#endif
 
   /* Register UORB Sensor */
 
-  priv->lower.ops = &g_sensor_ops;
-  priv->lower.type = SENSOR_TYPE_GNSS;
+  priv->lower.ops = &g_gnss_ops;
+  priv->lower.priv = priv;
+  priv->enabled = false;
 
-  err = sensor_register(&priv->lower, devno);
+  nbuffers[SENSOR_GNSS_IDX_GNSS] = 2;
+  nbuffers[SENSOR_GNSS_IDX_GNSS_SATELLITE] = 1;
+  nbuffers[SENSOR_GNSS_IDX_GNSS_MEASUREMENT] = 1;
+  nbuffers[SENSOR_GNSS_IDX_GNSS_CLOCK] = 1;
+  nbuffers[SENSOR_GNSS_IDX_GNSS_GEOFENCE] = 1;
+
+  err =
+      gnss_register(&priv->lower, devno, nbuffers, SENSOR_GNSS_IDX_GNSS_MAX);
   if (err < 0)
     {
       snerr("Failed to register L86-XXX driver: %d\n", err);
@@ -827,25 +713,23 @@ int l86xxx_register(FAR const char *uartpath, int devno)
     }
 
   sninfo("Registered L86-XXX driver with kernel polling thread"
-          " with baud rate %d and update rate %d",
-          L86_XXX_BAUD_RATE,
-          CONFIG_L86_XXX_FIX_INT);
+         " with baud rate %d",
+         L86_XXX_BAUD_RATE);
+
+  return 0;
 
   /* Cleanup items on error */
 
-  if (err < 0)
-    {
-    sensor_unreg:
-      sensor_unregister(&priv->lower, devno);
-    close_file:
-      file_close(&priv->uart);
-    destroy_sem:
-      nxsem_destroy(&priv->run);
-    destroy_mutex:
-      nxmutex_destroy(&priv->devlock);
-    free_mem:
-      kmm_free(priv);
-    }
+sensor_unreg:
+  gnss_unregister(&priv->lower, devno);
+close_file:
+  file_close(&priv->uart);
+destroy_sem:
+  nxsem_destroy(&priv->run);
+destroy_mutex:
+  nxmutex_destroy(&priv->devlock);
+free_mem:
+  kmm_free(priv);
 
   return err;
 }

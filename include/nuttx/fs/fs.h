@@ -1370,6 +1370,22 @@ int fdlist_close(FAR struct fdlist *list, int fd);
 int nx_close(int fd);
 
 /****************************************************************************
+ * Name: find_driver
+ *
+ * Description:
+ *   Returns the pointer of a registered driver specified by 'pathname'
+ *
+ * Input Parameters:
+ *   pathname - the full path to the driver's device node in file system
+ *
+ * Returned Value:
+ *   Pointer to driver's registered private pointer or NULL if not found.
+ *
+ ****************************************************************************/
+
+FAR void *find_driver(FAR const char *pathname);
+
+/****************************************************************************
  * Name: open_blockdriver
  *
  * Description:
@@ -1937,6 +1953,31 @@ int file_pipe(FAR struct file *filep[2], size_t bufsize, int flags);
 #if defined(CONFIG_PIPES) && CONFIG_DEV_FIFO_SIZE > 0
 int nx_mkfifo(FAR const char *pathname, mode_t mode, size_t bufsize);
 #endif
+
+/****************************************************************************
+ * Name: map_anonymous
+ *
+ * Description:
+ *   Support simulation of private anonymous mapping by allocating memory
+ *   from heap
+ *
+ * Input Parameters:
+ *   map     Input struct containing user request
+ *   kernel  fs_heap_zalloc or kumm_zalloc
+ *
+ * Returned Value:
+ *   On success returns 0. Otherwise negated errno is returned appropriately.
+ *
+ *     ENOMEM
+ *       Insufficient memory is available to simulate mapping
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_FS_ANONMAP
+int map_anonymous(FAR struct mm_map_entry_s *entry, bool kernel);
+#else
+#  define map_anonymous(entry, kernel) (-ENOSYS)
+#endif /* CONFIG_FS_ANONMAP */
 
 #undef EXTERN
 #if defined(__cplusplus)

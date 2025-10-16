@@ -51,7 +51,7 @@
  * off this in this file.
  */
 
-#define CH_BASE_OFFSET(ch)  (0x80*(ch)) 
+#define CH_BASE_OFFSET(ch)  (0x80*(ch))
 #define CH_CXLBAR_OFFSET     0x50
 #define CH_CXFCR_OFFSET      0x5C
 #define CH_CXSR_OFFSET       0x60
@@ -181,10 +181,6 @@ static struct gpdma_ch_s g_chan[] =
   }
 #endif
 };
-
-static uint32_t circ_addr_1;
-
-static uint32_t circ_addr_1;
 
 /****************************************************************************
  * Private Functions
@@ -358,18 +354,6 @@ static int gpdma_setup(struct gpdma_ch_s *chan,
   /* Calculate block number of data bytes to transfer, update BR1 */
 
   reg = cfg->ntransfers;
-
-  if (cfg->mode & GPDMACFG_MODE_CIRC)
-    {
-      /* This only targets peripheral to memory, with memory increment */
-
-      circ_addr_1 = cfg->dest_addr;
-      gpdmach_putreg(chan, CH_CXLBAR_OFFSET,
-                    (uint32_t)&circ_addr_1 & (0xffff << 16));
-
-      reg = GPDMA_CXLLR_UDA | ((uint32_t)&circ_addr_1 & GPDMA_CXLLR_LA_MASK);
-      gpdmach_putreg(chan, CH_CXLLR_OFFSET, reg);
-    }
 
   gpdmach_putreg(chan, CH_CXBR1_OFFSET, reg);
 
@@ -595,7 +579,7 @@ void stm32_dmasetup(DMA_HANDLE handle, struct stm32_gpdma_cfg_s *cfg)
 
   /* Clear any unhandled flags from previous transactions */
 
-  /* gpdmach_putreg(chan, CH_CXFCR_OFFSET, 0x7f << 8); */
+  gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
 
   if (cfg->mode & GPDMACFG_MODE_CIRC)
     {
@@ -692,6 +676,31 @@ void stm32_dmastop(DMA_HANDLE handle)
   gpdma_ch_disable(chan);
 
   /* gpdma_ch_abort(chan); */
+}
+
+/****************************************************************************
+ * Name: stm32_dmaresidual
+ *
+ * Description:
+ *   Returns the number of data beats remaining to transfer in the current
+ *   STM32H5 GPDMA block.  This reads the BNDT[15:0] field from the
+ *   GPDMA_CxBR1 register, which indicates how many beats are left in the
+ *   programmed transfer.
+ *
+ * Assumptions:
+ *   - DMA handle was allocated by stm32_dmachannel().
+ *   - The handle refers to a valid STM32H5 GPDMA channel.
+ *
+ ****************************************************************************/
+
+size_t stm32_dmaresidual(DMA_HANDLE handle)
+{
+  struct gpdma_ch_s *chan = (struct gpdma_ch_s *)handle;
+  uint32_t           br1  = getreg32(chan->base + CH_CXBR1_OFFSET);
+
+  /* BNDT[15:0] = beats remaining in current block transfer */
+
+  return (size_t)(br1 & GPDMA_CXBR1_BNDT_MASK);
 }
 
 #ifdef CONFIG_STM32H5_DMACAPABLE
