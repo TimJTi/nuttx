@@ -27,6 +27,7 @@ include armv7-a/Make.defs
 CHIP_CSRCS  = sam_allocateheap.c sam_boot.c sam_clockconfig.c sam_irq.c
 CHIP_CSRCS += sam_lowputc.c sam_memories.c sam_memorymap.c sam_pck.c
 CHIP_CSRCS += sam_pio.c sam_pmc.c sam_sckc.c sam_serial.c sam_serialinit.c
+CHIP_CSRCS += sam_idle.c
 
 # Configuration dependent C and assembly language files
 
