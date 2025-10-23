@@ -71,79 +71,6 @@
  * Private Functions
  ****************************************************************************/
 
-static void sam_pmstandby(void)
-{
-  //ULP0 mode
-  uint32_t regval;
-  uint32_t read_reg[4];
-  const struct regulator_desc_s *act8945a_desc;
-  struct regulator_s            *act8945a;
-  unsigned int                  enabled;
-  unsigned int                  selector;
-
-  sam_piowrite(PIO_LCD_BACKLIGHT_ENABLE, true);
-
-  act8945a = regulator_get(CONFIG_ACT8945A_DCDC3_NAME);
-  regulator_disable(act8945a);
-
-  read_reg[0] = getreg32(SAM_PMC_PCSR0);
-  read_reg[1] = getreg32(SAM_PMC_PCSR1);
-  read_reg[2] = getreg32(SAM_PMC_SCSR);
-  read_reg[3] = getreg32(SAM_PMC_CKGR_UCKR);
-
-  regval = getreg32(SAM_MPDDRC_LPR);
-  regval &= ~0x03;
-  regval |= MPDDRC_LPR_LPCB_SELFREFRESH;
-  putreg32(regval, SAM_MPDDRC_LPR);
-
-  sam_mpddrc_disableclk();
-  sam_uhphs_disableclk();
-  sam_udphs_disableclk();
-  sam_mcan0_disableclk();
-  sam_mcan1_disableclk();
-  sam_classd_disableclk();
-  sam_adc_disableclk();
-  sam_qspi0_disableclk();
-  sam_spi0_disableclk();
-  sam_spi1_disableclk();
-  sam_pwm_disableclk();
-  sam_lcdc_disableclk();
-  sam_pio_disableclk();
-  sam_flexcom2_disableclk();
-  sam_flexcom3_disableclk();
-  sam_flexcom4_disableclk();
-  sam_uart3_disableclk();
-  sam_twi0_disableclk();
-  sam_twi1_disableclk();
-  sam_piob_disableclk();
-  sam_pioc_disableclk();
-  sam_piod_disableclk();
-  sam_xdmac0_disableclk();
-  sam_xdmac1_disableclk();
-
-  int i;
-  for (i = 0; i < 32; i++)
-    {
-      sam_disableperiph0(i);
-    }
-  for (i = 32; i < 79; i++)
-    {
-      sam_disableperiph0(i - 32);
-    }
-
-  regval = getreg32(SAM_PMC_MCKR);
-  regval &= ~0x03;;
-  regval |= 0;
-  putreg32(regval, SAM_PMC_MCKR);
-
-
-  asm("cpsid if");
-  asm("WFI");
-
-  while(1);
-
-}
-
 /****************************************************************************
  * Name: up_idlepm
  *
@@ -201,11 +128,9 @@ static void up_idlepm(void)
           break;
 
         case PM_STANDBY:
-          //sam_pmstop(true);
           break;
 
         case PM_SLEEP:
-          //sam_pmstandby();
           break;
 
         default:
