@@ -371,6 +371,12 @@ static inline void sam_wdtdisable(void)
 osentry_function
 void arm_boot(void)
 {
+#ifdef CONFIG_ARCH_PERF_EVENTS
+  /* Perf init */
+
+  up_perf_init((void *)BOARD_MCK_FREQUENCY);
+#endif
+
 #ifdef CONFIG_ARCH_RAMFUNCS
   const uint32_t *src;
   uint32_t *dest;
