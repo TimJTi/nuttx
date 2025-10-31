@@ -765,7 +765,10 @@ static void sam_show_base(void);
 #ifdef CONFIG_SAMA5_LCDC_HCR
 static void sam_show_hcr(void);
 #endif
-
+#ifdef CONFIG_FB_UPDATE
+static int sam_updatearea(struct fb_vtable_s *vtable,
+                          const struct fb_area_s *area);
+#endif
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -790,6 +793,9 @@ static const struct fb_vtable_s g_base_vtable =
 {
   .getvideoinfo  = sam_base_getvideoinfo,
   .getplaneinfo  = sam_base_getplaneinfo,
+#ifdef CONFIG_FB_UPDATE
+  .updatearea    = sam_updatearea,
+#endif
 #ifdef CONFIG_FB_CMAP
   .getcmap       = sam_base_getcmap,
   .putcmap       = sam_base_putcmap,
@@ -1010,6 +1016,34 @@ static const uintptr_t g_layerclut[LCDC_NLAYERS] =
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+#ifdef CONFIG_FB_UPDATE
+static int sam_updatearea(struct fb_vtable_s *vtable,
+                          const struct fb_area_s *area)
+{
+  int i;
+  uint8_t *fb = (uint8_t *)LAYER_BASE.framebuffer;
+  const size_t fbsize = sizeof(LAYER_BASE.framebuffer);
+
+  DEBUGASSERT(vtable != NULL && area != NULL);
+  ginfo("vtable=%p, area=%p\n", vtable, area);
+
+  /* Copy the entire framebuffer to itself, to fix the missing pixels.
+   * Not sure why this works.
+   */
+
+  for (i = 0; i < fbsize; i++)
+    {
+      /* Declare as volatile to prevent compiler optimization */
+
+      volatile uint8_t v = fb[i];
+
+      fb[i] = v;
+    }
+
+  return OK;
+}
+#endif
 
 /****************************************************************************
  * Name: sam_checkreg
