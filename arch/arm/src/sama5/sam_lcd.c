@@ -336,7 +336,11 @@
 #  error Undefined or unrecognized base resolution
 #endif
 
-#define SAMA5_BASE_FBSIZE (SAMA5_BASE_STRIDE * BOARD_LCDC_HEIGHT)
+#ifdef CONFIG_SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING
+#  define SAMA5_BASE_FBSIZE (SAMA5_BASE_STRIDE * BOARD_LCDC_HEIGHT * 2)
+#else
+#  define SAMA5_BASE_FBSIZE (SAMA5_BASE_STRIDE * BOARD_LCDC_HEIGHT)
+#endif
 
 #ifdef CONFIG_SAMA5_LCDC_OVR1
 #  ifndef CONFIG_SAMA5_LCDC_OVR1_MAXWIDTH
@@ -590,14 +594,14 @@
 #  define LCDC_NLAYERS 4
 #endif
 
-#define LAYER(i)     g_lcdc.layer[i]
-#define LAYER_BASE   g_lcdc.layer[LCDC_LAYER_BASE]
-#define LAYER_OVR1   g_lcdc.layer[LCDC_LAYER_OVR1]
-#define LAYER_OVR2   g_lcdc.layer[LCDC_LAYER_OVR2]
-#define LAYER_HEO    g_lcdc.layer[LCDC_LAYER_HEO]
+#define LAYER(i)         g_lcdc.layer[i]
+#define LAYER_BASE       g_lcdc.layer[LCDC_LAYER_BASE]
+#define LAYER_OVR1       g_lcdc.layer[LCDC_LAYER_OVR1]
+#define LAYER_OVR2       g_lcdc.layer[LCDC_LAYER_OVR2]
+#define LAYER_HEO        g_lcdc.layer[LCDC_LAYER_HEO]
 
 #ifdef SAMA5_HAVE_LCDC_HCRCH
-#  define LAYER_HCR  g_lcdc.layer[LCDC_LAYER_HCR]
+#  define LAYER_HCR      g_lcdc.layer[LCDC_LAYER_HCR]
 #endif
 
 /****************************************************************************
@@ -650,6 +654,7 @@ struct sam_layer_s
   uint8_t nclut;           /* Number of colors in the CLUT */
 #endif
 };
+
 
 /* This structure provides the overall state of the LCDC */
 
@@ -712,6 +717,11 @@ static int sam_base_getcmap(struct fb_vtable_s *vtable,
                             struct fb_cmap_s *cmap);
 static int sam_base_putcmap(struct fb_vtable_s *vtable,
                             const struct fb_cmap_s *cmap);
+#endif
+
+#if defined(CONFIG_SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING)
+static int sama5_pandisplay(struct fb_vtable_s *vtable,
+                            struct fb_planeinfo_s *pinfo);
 #endif
 
 /* The following is provided only if the video hardware supports a hardware
@@ -790,6 +800,9 @@ static const struct fb_vtable_s g_base_vtable =
 {
   .getvideoinfo  = sam_base_getvideoinfo,
   .getplaneinfo  = sam_base_getplaneinfo,
+#ifdef CONFIG_SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING
+      .pandisplay = sama5_pandisplay,
+#endif
 #ifdef CONFIG_FB_CMAP
   .getcmap       = sam_base_getcmap,
   .putcmap       = sam_base_putcmap,
@@ -1148,17 +1161,55 @@ static int sam_base_getplaneinfo(struct fb_vtable_s *vtable, int planeno,
   lcdinfo("vtable=%p planeno=%d pinfo=%p\n", vtable, planeno, pinfo);
   if (vtable && planeno == 0 && pinfo)
     {
-      pinfo->fbmem   = (void *)LAYER_BASE.framebuffer;
-      pinfo->fblen   = SAMA5_BASE_FBSIZE;
-      pinfo->stride  = SAMA5_BASE_STRIDE;
-      pinfo->display = 0;
-      pinfo->bpp     = LAYER_BASE.bpp;
+      pinfo->fbmem        = (void *)LAYER_BASE.framebuffer;
+      pinfo->fblen        = SAMA5_BASE_FBSIZE;
+      pinfo->stride       = SAMA5_BASE_STRIDE;
+      pinfo->display      = 0;
+      pinfo->bpp          = LAYER_BASE.bpp;
+      pinfo->xres_virtual = BOARD_LCDC_WIDTH;
+#ifdef CONFIG_SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING
+      pinfo->yres_virtual = BOARD_LCDC_HEIGHT * 2;
+#else
+      pinfo->yres_virtual = BOARD_LCDC_HEIGHT;
+#endif
+      pinfo->xoffset = 0;
+      pinfo->yoffset = 0;
       return OK;
     }
 
   lcderr("ERROR: Returning EINVAL\n");
   return -EINVAL;
 }
+
+/****************************************************************************
+ * Name: sama5_pandisplay
+ ****************************************************************************/
+
+#ifdef CONFIG_SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING
+static int sama5_pandisplay(struct fb_vtable_s *vtable,
+                            struct fb_planeinfo_s *pinfo)
+{
+  DEBUGASSERT(vtable != NULL && vtable == &g_base_vtable);
+  DEBUGASSERT(pinfo != NULL);
+
+  struct sam_dscr_s *dscr;
+  uint8_t           *buffer;
+  int                lid;
+  uint32_t           new_fb_start = (uint32_t)pinfo->fbmem +
+                                     pinfo->yoffset * pinfo->stride +
+                                     pinfo->xoffset * (pinfo->bpp / 8);
+
+  dscr    = LAYER_BASE.dscr;
+  lid     = LAYER_BASE.lid;
+  buffer  = (uint8_t *)new_fb_start;
+
+  /* DMA is running, just add new descriptor to queue */
+
+  sam_dmasetup(lid, dscr, buffer);
+
+  return 0;
+}
+#endif
 
 /****************************************************************************
  * Name: sam_base_getcmap

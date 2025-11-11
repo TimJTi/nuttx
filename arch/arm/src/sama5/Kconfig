@@ -1311,20 +1311,31 @@ config SAMA5_LCDC_FB_VBASE
 	---help---
 		If you are using the LCDC, then you must provide the virtual
 		address of the start of the framebuffer.  This address must be
-		aligned to a 1MB bounder (i.e., the last five "digits" of the
+		aligned to a 1MB boundary (i.e., the last five "digits" of the
 		hexadecimal address must be zero).
 
 config SAMA5_LCDC_FB_PBASE
-	hex "Framebuffer memory start address (virtual)"
+	hex "Framebuffer memory start address (physical)"
 	---help---
 		If you are using the LCDC, then you must provide the physical
 		address of the start of the framebuffer.  This address must be
-		aligned to a 1MB bounder (i.e., the last five "digits" of the
-		hexadecimal address must be zero).
+		aligned to a 1MB boundary (i.e., the last five "digits" of the
+		hexadecimal address must be zero). Usually there's a 1:1 mapping of
+		virtual to physical addresses so this and SAMA5_LCDC_FB_VBASE are
+		usually the same.
 
 config SAMA5_LCDC_FB_SIZE
 	int "Framebuffer memory size (bytes)"
 	default 0
+
+config SAMA5_LCDC_BASE_FB_DOUBLE_BUFFERING
+	bool "Enable Base Layer double buffering"
+	default n
+	---help---
+		Enable double buffering to allow updates to the framebuffer while the display is being refreshed.
+		This configuration requires two framebuffers: one active and one inactive.
+		When the display refreshes, the active and inactive framebuffers are swapped,
+		enabling smooth and flicker-free updates.
 
 comment "Base layer configuration"
 
