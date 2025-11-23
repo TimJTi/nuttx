@@ -40,6 +40,138 @@ Help message::
   Where a <commit list> is any syntax supported by git for specifying git revision, see GITREVISIONS(7)
   Where a <patch file names> is a space separated list of patch file names or wildcard. or *.patch
 
+The checkpatch.sh script currently checks these types of files:
+
+*************************************
+checkpatch.sh is a bash script that make use of nxstyle and codespell tools to format patches and files conform to NuttX coding standard.
+For example, it has been used in NuttX github action PR check build
+
+https://nuttx.apache.org/docs/latest/components/tools/index.html#checkpatch-sh
+
+
+The checkpatch.sh script currently checks these types of files:
+
+
+C code
+^^^^^^^
+
+File: .h, .c
+
+Tools required: nxstyle 
+
+nxstyle: https://nuttx.apache.org/docs/latest/components/tools/index.html#nxstyle-c
+
+
+Python
+^^^^^^^
+
+File: .py
+
+Tools required: black isort flake8 -> "pip install black isort flake8"
+
+```black```: An code formatter that automatically formats your Python code.
+
+```isort```: A tool for sorting Python imports in a consistent and organized manner.
+
+```flake8```: A code linting tool that checks your code and identifies potential issues.
+
+Use: black <src>
+
+*************************************
+Rust
+------------------------------------
+
+File: .rs
+Tools required: rustfmt -> "rustup component add rustfmt"
+
+rustfmt: A tool for formatting Rust code according to style guidelines
+*************************************
+CMake
+------------------------------------
+File: CMakeLists.txt, .cmake
+
+Tools required: cmake-format -> "pip install cmake-format"
+
+Use: cmake-format <src> -o <dst>
+cmake-format: A tool for formatting CMake file.
+*************************************
+
+also check out
+
+*************************************
+All files
+------------------------------------
+File: All file
+
+Tools required:
+   codespell -> "pip install codespell"
+   cvt2utf -> "pip install cvt2utf"
+
+codespell: A tool simple spell checker
+           https://pypi.org/project/codespell/
+cvt2utf: A tool converts non-UTF-encoded files to UTF-8 encoding
+         https://github.com/x1angli/cvt2utf
+
+Checks that files do not have execution permissions. (Only .bat, .sh and .ph allowed).
+------------------------------------
+
+File: .h, .c
+
+Tools required: nxstyle 
+
+nxstyle: https://nuttx.apache.org/docs/latest/components/tools/index.html#nxstyle-c
+
+*************************************
+`Python`
+------------------------------------
+
+File: .py
+
+Tools required: black isort flake8 -> "pip install black isort flake8"
+
+black: An code formatter that automatically formats your Python code.
+isort: A tool for sorting Python imports in a consistent and organized manner.
+flake8: A code linting tool that checks your code and identifies potential issues.
+
+Use: black <src>
+
+*************************************
+Rust
+------------------------------------
+
+File: .rs
+Tools required: rustfmt -> "rustup component add rustfmt"
+
+rustfmt: A tool for formatting Rust code according to style guidelines
+*************************************
+CMake
+------------------------------------
+File: CMakeLists.txt, .cmake
+
+Tools required: cmake-format -> "pip install cmake-format"
+
+Use: cmake-format <src> -o <dst>
+cmake-format: A tool for formatting CMake file.
+*************************************
+
+also check out
+
+*************************************
+All files
+------------------------------------
+File: All file
+
+Tools required:
+   codespell -> "pip install codespell"
+   cvt2utf -> "pip install cvt2utf"
+
+codespell: A tool simple spell checker
+           https://pypi.org/project/codespell/
+cvt2utf: A tool converts non-UTF-encoded files to UTF-8 encoding
+         https://github.com/x1angli/cvt2utf
+
+Checks that files do not have execution permissions. (Only .bat, .sh and .ph allowed).
+
 configure.sh configure.bat configure.c, cfgparser.c, and cfgparser.h
 --------------------------------------------------------------------
 
